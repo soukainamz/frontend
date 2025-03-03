@@ -1,4 +1,5 @@
 import { MongoClient, Collection } from 'mongodb';
+// import {scrape} from './scrap';
 
 const uri: string = "mongodb://localhost:27017/";
 const client: MongoClient = new MongoClient(uri);
@@ -8,6 +9,7 @@ async function runServer(): Promise<void> {
     console.log("Starting server...");
     await client.connect();
     console.log("Connected to local MongoDB");
+
 
     // Select the database and collections
     const database = client.db('frontend');
@@ -36,6 +38,47 @@ async function runServer(): Promise<void> {
  * Polls the Statistics collection every second.
  * When a new transaction is detected, updates global and time-based stats.
  */
+// async function pollForChanges(
+//   statsCollection: Collection,
+//   aggregateCollection: Collection,
+//   dailyStatsCollection: Collection,
+//   weeklyStatsCollection: Collection,
+//   monthlyStatsCollection: Collection,
+//   hourlyStatsCollection: Collection
+// ): Promise<void> {
+//   // Retrieve the most recent document (using natural order)
+//   let lastDocument = await statsCollection.findOne({}, { sort: { $natural: -1 } });
+//   console.log("Polling for changes in the Statistics collection...");
+
+//   // Poll every 1 second
+//   setInterval(async () => {
+//     try {
+//       const currentDocument = await statsCollection.findOne({}, { sort: { $natural: -1 } });
+//       if (
+//         currentDocument &&
+//         (!lastDocument || String(currentDocument._id) !== String(lastDocument._id))
+//       ) {
+//         console.log("New transaction detected:", currentDocument);
+
+//         // Update global aggregated stats
+//         await updateAggregateStats(currentDocument, aggregateCollection);
+
+//         // Update daily, weekly, monthly, and hourly stats
+//         await updateDailyStats(currentDocument, dailyStatsCollection);
+//         await updateWeeklyStats(currentDocument, weeklyStatsCollection);
+//         await updateMonthlyStats(currentDocument, monthlyStatsCollection);
+//         await updateHourlyStats(currentDocument, hourlyStatsCollection);
+
+//         // Update our reference to the latest document
+//         lastDocument = currentDocument;
+//       }
+//     } catch (err) {
+//       console.error("Error while polling for changes:", err);
+//     }
+//   }, 1000);
+// }
+
+
 async function pollForChanges(
   statsCollection: Collection,
   aggregateCollection: Collection,
@@ -48,8 +91,8 @@ async function pollForChanges(
   let lastDocument = await statsCollection.findOne({}, { sort: { $natural: -1 } });
   console.log("Polling for changes in the Statistics collection...");
 
-  // Poll every 1 second
-  setInterval(async () => {
+  // Define a recursive polling function
+  async function poll() {
     try {
       const currentDocument = await statsCollection.findOne({}, { sort: { $natural: -1 } });
       if (
@@ -58,10 +101,8 @@ async function pollForChanges(
       ) {
         console.log("New transaction detected:", currentDocument);
 
-        // Update global aggregated stats
+        // Update global aggregated stats and time-based stats
         await updateAggregateStats(currentDocument, aggregateCollection);
-
-        // Update daily, weekly, monthly, and hourly stats
         await updateDailyStats(currentDocument, dailyStatsCollection);
         await updateWeeklyStats(currentDocument, weeklyStatsCollection);
         await updateMonthlyStats(currentDocument, monthlyStatsCollection);
@@ -72,8 +113,14 @@ async function pollForChanges(
       }
     } catch (err) {
       console.error("Error while polling for changes:", err);
+    } finally {
+      // Schedule the next poll only after all tasks complete
+      setTimeout(poll, 4000);
     }
-  }, 1000);
+  }
+
+  // Start the recursive polling
+  poll();
 }
 
 /**
@@ -89,12 +136,44 @@ async function updateAggregateStats(
   let countLiquidity = 0;
   let countNoBalance = 0;
   let countSlippage = 0;
+  let Tokens : any = [];
+  let motifinfo;
 
+  //  motifinfo = await scrape(transaction.txid);
+  //  motifinfo = await scrape();
+  // console.log(motifinfo);
+
+   
+  
+  
   if (transaction.decision === "profit") {
     win = Number(transaction.amountOut) - Number(transaction.amountIn);
-  } else if (transaction.decision === "loss") {
+
+
+
+  } else if (transaction.decision === "fail") {
+    
     loss = Number(transaction.amountIn) - Number(transaction.amountOut);
+    
     const motif = (transaction.motif || "").toLowerCase();
+
+    // if(motif == "" || motif == "no error"){
+    //   motifinfo.forEach(motif => {
+    //     if (motif.includes("liquidity") && motif.includes("error")) {
+    //       countLiquidity = 1;
+    //     }
+    //     if (motif.includes("no balance") && motif.includes("error")) {
+    //       countNoBalance = 1;
+    //     }
+    //     if (motif.includes("slippage") && motif.includes("error")) {
+    //       countSlippage = 1;
+    //     }
+    //     if (motif.includes("Root") && motif.includes("error")) {
+    //       countSlippage = 1;
+    //     }
+    //   });
+    // }
+
     if (motif.includes("liquidity")) {
       countLiquidity = 1;
     }
@@ -105,23 +184,55 @@ async function updateAggregateStats(
       countSlippage = 1;
     }
   }
+  
+  
+  const TokenP : { Token: any; Percentage: any; } = {"Token":transaction.Token,"Percentage":transaction.priceChangePercentage};
+  Tokens.push(TokenP);
+
+
+  // await aggregateCollection.updateOne(
+  //   { id: "aggregatedStats" },
+  //   {
+  //     $inc: {
+  //       totalWinLoss: (win/(win+loss))* 100,
+  //       totalWin: win,
+  //       totalLoss: loss,
+  //       countLiquidity: countLiquidity,
+  //       countNoBalance: countNoBalance,
+  //       countSlippage: countSlippage,
+  //       Tokens:Tokens
+  //     },
+  //   },
+  //   { upsert: true }
+  // );
+
 
   await aggregateCollection.updateOne(
     { id: "aggregatedStats" },
     {
       $inc: {
+        // totalWinLoss: (win/(win+loss)) * 100,
+        totalWinLoss: (win* 100)/(win+loss),
         totalWin: win,
         totalLoss: loss,
         countLiquidity: countLiquidity,
         countNoBalance: countNoBalance,
-        countSlippage: countSlippage,
+        countSlippage: countSlippage
       },
+      $push:  {
+        Tokens:  { $each: Tokens }
+      } as any
     },
     { upsert: true }
   );
 
+
   console.log("Aggregate stats updated.");
 }
+
+
+
+
 
 /* -------------------- Helper Functions -------------------- */
 
@@ -223,6 +334,7 @@ async function updateDailyStats(
         totalTimeTaken: timeTaken,
         totalWin: win,
         totalLoss: loss,
+        totalWinLoss: (win/(win+loss))* 100,
         netProfit: profit,
       },
       $setOnInsert: { date: dateKey },
@@ -375,6 +487,8 @@ async function updateHourlyStats(
   const feesSpent = fee + platformFee + priorityFee;
 
   const timeTaken = Number(transaction.timeTaken) || 0;
+  let Tokens : any = [];
+
 
   let win = 0;
   let loss = 0;
@@ -385,6 +499,29 @@ async function updateHourlyStats(
     if (loss < 0) loss = 0;
   }
   const profit = win - loss;
+
+  const TokenP : { Token: any; Percentage: any; } = {"Token":transaction.Token,"Percentage":transaction.priceChangePercentage};
+  Tokens.push(TokenP);
+
+  // await hourlyStatsCollection.updateOne(
+  //   { hour: hourKey },
+  //   {
+  //     $inc: {
+  //       successCount,
+  //       failCount,
+  //       totalTransactions: 1,
+  //       totalFeesSpent: feesSpent,
+  //       totalTimeTaken: timeTaken,
+  //       totalWin: win,
+  //       totalLoss: loss,
+  //       netProfit: profit,
+  //       Tokens : Tokens
+  //     },
+  //     $setOnInsert: { hour: hourKey },
+  //   },
+  //   { upsert: true }
+  // );
+
 
   await hourlyStatsCollection.updateOne(
     { hour: hourKey },
@@ -397,13 +534,17 @@ async function updateHourlyStats(
         totalTimeTaken: timeTaken,
         totalWin: win,
         totalLoss: loss,
-        netProfit: profit,
+        netProfit: profit
       },
+      $push: {
+        Tokens: { $each: Tokens }
+      } as any ,
       $setOnInsert: { hour: hourKey },
     },
     { upsert: true }
   );
 
+  
   const updatedDoc = await hourlyStatsCollection.findOne({ hour: hourKey });
   if (updatedDoc && updatedDoc.totalTransactions && updatedDoc.totalTimeTaken !== undefined) {
     const averageTimeTaken = updatedDoc.totalTimeTaken / updatedDoc.totalTransactions;
